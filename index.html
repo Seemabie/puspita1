@@ -451,21 +451,61 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   music.src = 'Interlude.mp3';
   music.loop = true;
   music.preload = 'auto';
-  let ac = null, soundOn = false;
+  /* sound effects: built in the browser, no extra files. 'playback' lets them play even when an iPhone is on silent */
+  let ac = null, out = null, nbuf = null, soundOn = false;
   function A() {
-    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } }
+    if (!ac) {
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+      try {
+        ac = new (window.AudioContext || window.webkitAudioContext)();
+        const comp = ac.createDynamicsCompressor(); comp.connect(ac.destination);
+        out = ac.createGain(); out.gain.value = .9; out.connect(comp);
+        nbuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+        const d = nbuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      } catch (e) { ac = null; }
+    }
     if (ac && ac.state === 'suspended') ac.resume();
     return ac;
   }
-  function tone(f, t0, dur, vol, type) {
-    const a = A(); if (!a) return;
-    const g = a.createGain(); g.connect(a.destination);
-    g.gain.setValueAtTime(.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + .012); g.gain.exponentialRampToValueAtTime(.0001, t0 + dur);
-    const o = a.createOscillator(); o.type = type || 'sine'; o.frequency.value = f; o.connect(g); o.start(t0); o.stop(t0 + dur + .05);
+  function env(a, t0, peak, att, dec) {
+    const g = a.createGain();
+    g.gain.setValueAtTime(.0001, t0); g.gain.exponentialRampToValueAtTime(peak, t0 + att); g.gain.exponentialRampToValueAtTime(.0001, t0 + att + dec);
+    g.connect(out); return g;
   }
-  function tick() { if (!soundOn) return; const a = A(); if (!a) return; tone(pick([880, 988, 1175, 1319, 1568]), a.currentTime, .4, .045, 'triangle'); }
-  function chord() { if (!soundOn) return; const a = A(); if (!a) return; const t = a.currentTime; [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, t + i * .1, .9, .05, 'triangle')); }
-  function ding() { if (!soundOn) return; const a = A(); if (!a) return; tone(1568, a.currentTime, .9, .06); }
+  function osc(type, f, at, dur, peak, f2) {
+    const a = A(); if (!a) return;
+    const t0 = a.currentTime + (at || 0), o = a.createOscillator();
+    o.type = type; o.frequency.setValueAtTime(f, t0);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+    o.connect(env(a, t0, peak, .006, dur)); o.start(t0); o.stop(t0 + dur + .1);
+  }
+  function hiss(at, dur, peak, type, f, q, f2) {
+    const a = A(); if (!a) return;
+    const t0 = a.currentTime + (at || 0), s = a.createBufferSource(), fl = a.createBiquadFilter();
+    s.buffer = nbuf; fl.type = type || 'bandpass'; fl.frequency.setValueAtTime(f || 3000, t0); fl.Q.value = q || 1;
+    if (f2) fl.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+    s.connect(fl); fl.connect(env(a, t0, peak, .01, dur)); s.start(t0, Math.random() * .4); s.stop(t0 + dur + .1);
+  }
+  const SFX = {
+    tap() { osc('triangle', 660, 0, .09, .14, 990); },
+    clink(at = 0) { osc('sine', 2637, at, .55, .18); osc('sine', 3951, at, .35, .08); osc('sine', 1760, at, .4, .06); },
+    lid() { SFX.clink(); SFX.clink(.16); hiss(.2, 1.4, .12, 'bandpass', 3500, .7, 7000); },
+    pour() { hiss(0, .9, .16, 'bandpass', 700, 2.5, 1700); for (let i = 0; i < 6; i++) osc('sine', rand(300, 500), rand(.1, .8), .08, .08, rand(700, 1100)); },
+    plop() { osc('sine', 380, 0, .14, .32, 1100); },
+    bell(at = 0) { osc('sine', 2200, at, 1.1, .18); osc('sine', 3300, at, .7, .07); osc('sine', 5150, at, .35, .035); },
+    stamp() { osc('sine', 150, 0, .16, .5, 55); hiss(0, .07, .25, 'lowpass', 900, .7); },
+    till() { SFX.clink(0); SFX.clink(.09); hiss(.02, .16, .12, 'highpass', 5000, .7); SFX.bell(.22); },
+    ring() { osc('sine', 440, 0, .4, .09); osc('sine', 480, 0, .4, .09); },
+    pop(at = 0) { osc('sine', 520, at, .1, .26, 1300); },
+    beeps(n) { for (let i = 0; i < n; i++) osc('square', i % 2 ? 1046 : 880, i * .12, .05, .045); },
+    yes() { osc('triangle', 1046.5, 0, .25, .14); osc('triangle', 1568, .12, .45, .14); },
+    shutter() { hiss(0, .04, .4, 'highpass', 2500, .7); hiss(.07, .035, .3, 'highpass', 3000, .7); osc('square', 110, .12, .28, .03, 220); },
+    whoosh() { hiss(0, .38, .15, 'bandpass', 500, .8, 2600); },
+    sparkle(at = 0) { [1568, 2093, 2637, 3136, 4186].forEach((f, i) => osc('sine', f, at + i * .06, .3, .07)); },
+    chord(at = 0) { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => osc('triangle', f, at + i * .09, .9, .09)); }
+  };
+  function sfx(name, ...args) { if (!soundOn) return; try { SFX[name](...args); } catch (e) {} }
+  const chord = () => sfx('chord'), ding = () => sfx('whoosh'), tick = () => sfx('tap');
   function playMusic() { if (!musicOK) return; try { music.volume = .6; } catch (e) {} const p = music.play(); if (p && p.catch) p.catch(() => {}); }
   const sBtn = $('#sound');
   function setSound(on) {
@@ -477,7 +517,7 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   }
   sBtn.addEventListener('click', () => setSound(!soundOn));
   document.addEventListener('visibilitychange', () => { if (!soundOn) return; if (document.hidden) music.pause(); else playMusic(); });
-  function joy(el, n) { if (el) burstAt(el, { n: n || 16 }); tick(); buzz(); }
+  function joy(el, n, s) { if (el) burstAt(el, { n: n || 16 }); sfx(s || 'tap'); buzz(); }
 
   /* ---------- deck ---------- */
   const cards = $$('.course'), LAST = cards.length - 1;
@@ -514,7 +554,7 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   }
   function markDone(i) {
     if (done.has(i)) return;
-    done.add(i); chord();
+    done.add(i); sfx('chord', .45);
     plates[i].classList.add('on');
     if (i === cur) nextBtn.classList.add('ready');
   }
@@ -532,9 +572,9 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   pot.addEventListener('click', () => {
     if (pot.classList.contains('open')) return;
     pot.classList.add('open'); buzz(25);
-    setSound(true);
+    setSound(true); sfx('lid');
     const h = $('#cvHint'); h.style.animation = 'none'; h.textContent = 'Smells like love and care ☺️';
-    setTimeout(() => { burstAt(pot, { n: 70, power: 480, big: true }); chord(); }, reduce ? 0 : 500);
+    setTimeout(() => { burstAt(pot, { n: 70, power: 480, big: true }); sfx('sparkle'); sfx('chord', .2); }, reduce ? 0 : 500);
     setTimeout(() => cover.classList.add('leaving'), reduce ? 0 : 2300);
     setTimeout(() => { cover.hidden = true; fit(); nextBtn.focus({ preventScroll: true }); }, reduce ? 60 : 3100);
   });
@@ -543,7 +583,9 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   const glass = $('#glass'), gItems = $$('#gList li');
   let lv = 0;
   glass.addEventListener('click', () => {
-    joy(glass, 14);
+    joy(glass, 14, ['pour', 'plop', 'clink', 'clink'][lv]);
+    if (lv === 1) sfx('pour');
+    if (lv === 2) sfx('sparkle', .2);
     if (lv >= 3) return;
     lv++;
     glass.style.setProperty('--h', [0, 40, 70, 88][lv] + '%');
@@ -561,7 +603,7 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   /* ---------- 2 ticket ---------- */
   const tls = $$('.tl'); let served = 0;
   tls.forEach(t => t.addEventListener('click', () => {
-    joy(t.querySelector('.s'), 12);
+    joy(t.querySelector('.s'), 12, t.classList.contains('ok') ? 'tap' : 'bell');
     if (t.classList.contains('ok')) return;
     t.classList.add('ok'); t.setAttribute('aria-pressed', 'true');
     t.querySelector('.s').textContent = 'Served ✓';
@@ -571,6 +613,7 @@ button{font:inherit;color:inherit;touch-action:manipulation}
     const note = $('#payNote');
     if (served < tls.length) { note.textContent = 'Wait, the customer hasn\'t reviewed everything yet 🤭'; joy(e.currentTarget, 8); return; }
     const p = $('#paid'); p.classList.remove('show'); void p.offsetWidth; p.classList.add('show');
+    sfx('stamp'); sfx('till');
     note.textContent = 'Paid with an IOU: one BBQ with a view, plus dishes duty next time.';
     e.currentTarget.textContent = 'Paid in full ✓';
     burstAt(e.currentTarget, { n: 60, power: 500 }); buzz(25);
@@ -586,8 +629,10 @@ button{font:inherit;color:inherit;touch-action:manipulation}
     li.innerHTML = `<button class="call" type="button" aria-pressed="false"><span class="av" aria-hidden="true">P</span><span><span class="nm">Puspita 🌸</span><span class="sub">Missed call · ${t} PM</span></span><span class="ph" aria-hidden="true">✆</span></button>`;
     const b = li.firstChild;
     b.addEventListener('click', () => {
-      joy(b.querySelector('.ph'), 12);
-      if (b.classList.contains('back')) return;
+      const was = b.classList.contains('back');
+      joy(b.querySelector('.ph'), 12, was ? 'tap' : 'ring');
+      if (was) return;
+      sfx('pop', .45);
       b.classList.add('back'); b.setAttribute('aria-pressed', 'true');
       b.querySelector('.sub').textContent = `Called back ✓ · ${t} PM`;
       const m = document.createElement('span'); m.className = 'msg pop'; m.textContent = SORRY[i]; b.appendChild(m);
@@ -623,13 +668,13 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   function showStmt() { $('#stmt').innerHTML = `<small>Statement ${sIdx + 1} of ${STMTS.length}</small>${STMTS[sIdx]}`; }
   $('#testBtn').addEventListener('click', e => {
     if (testing || sIdx >= STMTS.length) { joy(e.currentTarget, 8); return; }
-    testing = true; buzz(); tick();
+    testing = true; buzz(); sfx('beeps', reduce ? 3 : 12);
     const led = $('#led'), v = $('#verdict'), b = e.currentTarget;
     led.className = 'led on'; v.classList.remove('show'); b.disabled = true; b.textContent = 'Analyzing…';
     wild = 1;
     setTimeout(() => {
       wild = 0; led.className = 'led ok';
-      void v.offsetWidth; v.classList.add('show'); chord(); buzz(20);
+      void v.offsetWidth; v.classList.add('show'); sfx('stamp'); sfx('yes'); buzz(20);
       burstAt(v, { n: 22, kinds: ['s', 'r'] });
       setTimeout(() => {
         sIdx++; testing = false; b.disabled = false; v.classList.remove('show'); led.className = 'led';
@@ -647,7 +692,7 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   /* ---------- 5 polaroids ---------- */
   const pols = $$('.pol'); let dev = 0;
   pols.forEach(p => p.addEventListener('click', () => {
-    joy(p.querySelector('.pic'), 18);
+    joy(p.querySelector('.pic'), 18, p.classList.contains('dev') ? 'tap' : 'shutter');
     if (p.classList.contains('dev')) return;
     p.classList.add('dev'); p.setAttribute('aria-pressed', 'true');
     dev++;
@@ -659,12 +704,12 @@ button{font:inherit;color:inherit;touch-action:manipulation}
   const cloche = $('#cloche');
   let fTimers = [];
   cloche.addEventListener('click', () => {
-    if (cloche.classList.contains('lift')) { joy(cloche, 30); return; }
-    cloche.classList.add('lift'); buzz(30);
+    if (cloche.classList.contains('lift')) { joy(cloche, 30, 'sparkle'); return; }
+    cloche.classList.add('lift'); buzz(30); sfx('clink'); sfx('whoosh');
     $('#liftHint').textContent = 'Something sweet for you';
     setTimeout(() => {
       const n = $('#note'); n.hidden = false; scrollInto(n);
-      chord(); markDone(5);
+      sfx('sparkle'); markDone(5);
       [0, 450, 950, 1600].forEach(ms => fTimers.push(setTimeout(() => burst(rand(FW * .2, FW * .8), rand(FH * .2, FH * .5), { n: 70, power: 600, big: true }), ms)));
     }, reduce ? 0 : 650);
   });
